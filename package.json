@@ -1,0 +1,13 @@
+{
+  "name": "keen-sprint-report",
+  "version": "1.0.0",
+  "main": "index.js",
+  "author": "Matt Grosso <matt.grosso@framebridge.com>",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1"
+  }
+}
