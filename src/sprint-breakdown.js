@@ -16,6 +16,7 @@ import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import { jiraFetch } from './jira.js';
+import { fetchCurrentSprintMemberships } from './sprint-membership.js';
 
 const BOARD_ID = process.env.JIRA_BOARD_ID;
 const PROJECT_KEY = process.env.JIRA_PROJECT_KEY || 'KEEN';
@@ -135,7 +136,11 @@ function parseSprintList(str) {
  * Build a list of (timestamp, toSprintList) showing what sprints
  * this issue was in over time.
  */
-function buildSprintTimeline(issue) {
+// `currentSprintNames` is a fallback list of sprint names the ticket is
+// in *right now*, used when the changelog has no Sprint change events.
+// Without this, tickets created directly into a sprint look like they
+// were never in any sprint.
+function buildSprintTimeline(issue, currentSprintNames = []) {
   const histories = (issue.changelog?.histories || []).slice().sort(
     (a, b) => new Date(a.created) - new Date(b.created),
   );
@@ -153,13 +158,7 @@ function buildSprintTimeline(issue) {
     }
   }
 
-  // The earliest event's "from" tells us the initial sprint membership
-  // before any changes. If there are no sprint events, we assume empty.
-  let initial = [];
-  if (events.length > 0) {
-    initial = events[0].from;
-  }
-
+  const initial = events.length > 0 ? events[0].from : currentSprintNames.slice();
   return { initial, events };
 }
 
@@ -242,6 +241,10 @@ async function main() {
   const cache = loadCache();
   let cacheChanged = false;
 
+  console.log('Fetching current Sprint memberships (for tickets with no Sprint changelog events)...');
+  const currentMemberships = await fetchCurrentSprintMemberships(PROJECT_KEY);
+  console.log(`  got ${currentMemberships.size} ticket memberships\n`);
+
   const results = [];
 
   for (const sprint of workingSet) {
@@ -301,7 +304,7 @@ async function main() {
 
     for (const issue of enriched) {
       if (issue.__error) continue;
-      const timeline = buildSprintTimeline(issue);
+      const timeline = buildSprintTimeline(issue, currentMemberships.get(issue.key) || []);
       const atStart = sprintsAt(timeline, start).includes(sprintName);
       const atEnd = sprintsAt(timeline, end).includes(sprintName);
       const statusAtEnd = statusAt(issue, end);
