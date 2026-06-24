@@ -80,7 +80,7 @@ async function fetchSprintIssues(sprintId) {
   const all = [];
   while (true) {
     const data = await jiraFetch(
-      `/rest/agile/1.0/sprint/${sprintId}/issue?startAt=${startAt}&maxResults=100&fields=summary,status,issuetype,assignee,created,updated,customfield_10023,customfield_10019`,
+      `/rest/agile/1.0/sprint/${sprintId}/issue?startAt=${startAt}&maxResults=100&fields=summary,status,issuetype,assignee,created,updated,customfield_10023,customfield_10019,customfield_10218,customfield_10217`,
     );
     all.push(...data.issues);
     if (all.length >= data.total) break;
@@ -132,6 +132,7 @@ async function main() {
   const enriched = await pMap(issues, (i) => fetchChangelog(i.key), 8);
 
   let committedT = 0, committedP = 0;
+  let carryoverT = 0, carryoverP = 0;
   let addedT = 0, addedP = 0;
   let doneT = 0, doneP = 0;
   let inProgressT = 0, inProgressP = 0;
@@ -141,17 +142,34 @@ async function main() {
   const addedRows = [];
   const doneRows = [];
   const inFlightRows = [];
+  const actualRows = []; // { key, est, actual, st, summary } — tickets with Actual Story Points filled in
 
   for (const issue of enriched) {
     const tl = buildSprintTimeline(issue);
     const atStart = sprintsAt(tl, start).includes(active.name);
-    const atNow = sprintsAt(tl, now).includes(active.name);
-    if (!atNow) continue; // removed mid-sprint
+    // No "in sprint now" gate: /sprint/{id}/issue only returns issues currently in
+    // the sprint, so every issue here is in it now. The old changelog replay
+    // occasionally decided a (usually carried-over) ticket had left the sprint and
+    // `continue`d past it, which dropped real tickets/points from every total below.
     const pts = issue.fields.customfield_10023 || 0;
+    const actual = typeof issue.fields.customfield_10218 === 'number'
+      ? issue.fields.customfield_10218 : null;
     const st = issue.fields.status?.name || 'Unknown';
     statusCounts[st] = (statusCounts[st] || 0) + 1;
+    if (actual !== null) {
+      actualRows.push({ key: issue.key, est: pts, actual, st, summary: issue.fields.summary });
+    }
 
-    if (atStart) {
+    // Carryover = the ticket belonged to an earlier sprint (one that started before
+    // this sprint did). Tracked separately so "added" reflects only genuine new
+    // scope, not work rolled over from a prior sprint. (Carryover reads as
+    // committed-ish — it's continuing work, not scope creep.)
+    const sprintField = Array.isArray(issue.fields.customfield_10019) ? issue.fields.customfield_10019 : [];
+    const carriedOver = sprintField.some((s) => s?.startDate && new Date(s.startDate) < start);
+    if (carriedOver) {
+      carryoverT++;
+      carryoverP += pts;
+    } else if (atStart) {
       committedT++;
       committedP += pts;
     } else {
@@ -189,8 +207,9 @@ async function main() {
 
   console.log(`\n=== ${active.name} mid-flight snapshot ===`);
   console.log(`Committed at start:  ${committedT}t / ${committedP}p`);
-  console.log(`Added so far:        ${addedT}t / ${addedP}p`);
-  console.log(`Total in sprint:     ${committedT + addedT}t / ${committedP + addedP}p\n`);
+  console.log(`Carried over:        ${carryoverT}t / ${carryoverP}p`);
+  console.log(`Added mid-sprint:    ${addedT}t / ${addedP}p   (genuine scope additions)`);
+  console.log(`Total in sprint:     ${committedT + carryoverT + addedT}t / ${committedP + carryoverP + addedP}p\n`);
   console.log(`Done already:        ${doneT}t / ${doneP}p`);
   console.log(`In flight (active):  ${inProgressT}t / ${inProgressP}p`);
   console.log(`Not yet started:     ${openT}t / ${openP}p\n`);
@@ -225,8 +244,31 @@ async function main() {
   }
   if (inFlightRows.length > 15) console.log(`  ... and ${inFlightRows.length - 15} more`);
 
+  // Estimated (story points) vs Actual (Actual Story Points field). Actuals get
+  // filled in as work completes, so this section grows over the sprint.
+  const totalEstP = committedP + carryoverP + addedP;
+  const totalTickets = committedT + carryoverT + addedT;
+  const withActual = actualRows.length;
+  const estOnFilled = actualRows.reduce((s, r) => s + r.est, 0);
+  const actOnFilled = actualRows.reduce((s, r) => s + r.actual, 0);
+  console.log(`\n=== Estimated vs Actual points ===`);
+  console.log(`Total estimate (story points) in sprint: ${totalEstP}p`);
+  console.log(`Actual Story Points filled in on ${withActual} of ${totalTickets} tickets`);
+  if (withActual) {
+    const delta = actOnFilled - estOnFilled;
+    const pct = estOnFilled ? (100 * delta) / estOnFilled : 0;
+    console.log(`  On those ${withActual}: estimate ${estOnFilled}p → actual ${actOnFilled}p  (${delta >= 0 ? '+' : ''}${delta}p, ${pct >= 0 ? '+' : ''}${pct.toFixed(0)}%)`);
+    actualRows.sort((a, b) => (b.actual - b.est) - (a.actual - a.est));
+    for (const r of actualRows) {
+      const d = r.actual - r.est;
+      console.log(`  [${r.key}] est ${r.est}p → act ${r.actual}p (${d >= 0 ? '+' : ''}${d})  ${r.st} — ${(r.summary || '').slice(0, 50)}`);
+    }
+  } else {
+    console.log(`  (none filled in yet — ask the team to populate "Actual Story Points")`);
+  }
+
   // Pace check
-  const completionRate = (committedP + addedP) > 0 ? (100 * doneP) / (committedP + addedP) : 0;
+  const completionRate = totalEstP > 0 ? (100 * doneP) / totalEstP : 0;
   const pctElapsed = (100 * elapsedDays) / totalDays;
   console.log(`\nPace: ${completionRate.toFixed(0)}% of points done at ${pctElapsed.toFixed(0)}% through the sprint.`);
 }
