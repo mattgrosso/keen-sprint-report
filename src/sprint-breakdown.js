@@ -1,11 +1,12 @@
 // Compute true sprint composition from Jira changelogs.
 //
-// For each closed sprint, we replay each ticket's history to determine:
-//   - Was it in this sprint at activation (committed)?
-//   - Was it added during the sprint (added mid-sprint)?
-//   - Was it removed during the sprint (removed mid-sprint)?
-//   - Was it Done before sprint close (completed)?
-//   - Was it still open at sprint close and moved to a later sprint (carried out)?
+// For each closed sprint we count every ticket the Jira API associates with it
+// (the reliable membership signal), then classify each by:
+//   - Origin: carried in from an earlier sprint, committed at start, or added mid-sprint.
+//   - Outcome: Done by sprint close (completed) or still open (carried out).
+// Story points are summed per bucket; completion = completed / total.
+// (We trust the API for membership rather than a changelog replay of the Sprint
+//  field, which used to drop tickets and badly undercount carryover-heavy sprints.)
 //
 // Caches per-issue changelogs to .cache/changelogs.json so reruns are fast.
 //
@@ -75,7 +76,7 @@ async function fetchSprintIssues(sprintId) {
   const all = [];
   while (true) {
     const data = await jiraFetch(
-      `/rest/agile/1.0/sprint/${sprintId}/issue?startAt=${startAt}&maxResults=100&fields=summary,status,issuetype,assignee,created,updated,customfield_10023`,
+      `/rest/agile/1.0/sprint/${sprintId}/issue?startAt=${startAt}&maxResults=100&fields=summary,status,issuetype,assignee,created,updated,customfield_10023,customfield_10019`,
     );
     all.push(...data.issues);
     if (all.length >= data.total) break;
@@ -211,7 +212,12 @@ function statusAt(issue, t) {
 
 function isDone(statusName) {
   const n = (statusName || '').toLowerCase();
-  return ['deployed', 'completed', 'done', 'closed', 'resolved'].includes(n);
+  // Includes the "awaiting release" column (Ready for Theme Deploy / Awaiting
+  // Release Date) — QA-passed work awaiting a release date counts as complete.
+  return [
+    'deployed', 'completed', 'done', 'closed', 'resolved',
+    'ready for theme deploy', 'awaiting release date',
+  ].includes(n);
 }
 
 function pickStoryPoints(issue) {
@@ -259,7 +265,8 @@ async function main() {
     const enriched = await pMap(
       issues,
       async (issueStub) => {
-        const cacheKey = `${issueStub.key}@${issueStub.fields.updated || ''}`;
+        // @v2: cache schema bumped to include customfield_10019 (sprint history)
+        const cacheKey = `${issueStub.key}@${issueStub.fields.updated || ''}@v2`;
         if (cache[cacheKey]) return cache[cacheKey];
         const full = await fetchIssueChangelog(issueStub.key);
         const stripped = {
@@ -272,6 +279,7 @@ async function main() {
             assignee: full.fields.assignee,
             summary: full.fields.summary,
             customfield_10023: full.fields.customfield_10023,
+            customfield_10019: full.fields.customfield_10019,
           },
           changelog: full.changelog,
         };
@@ -291,59 +299,60 @@ async function main() {
     const start = new Date(sprint.startDate);
     const end = new Date(sprint.completeDate);
 
-    let committedTickets = 0,
-      committedPts = 0;
-    let addedTickets = 0,
-      addedPts = 0;
-    let removedTickets = 0,
-      removedPts = 0;
-    let completedTickets = 0,
-      completedPts = 0;
-    let carriedOverTickets = 0,
-      carriedOverPts = 0;
+    let totalTickets = 0, totalPts = 0;
+    let committedTickets = 0, committedPts = 0;
+    let addedTickets = 0, addedPts = 0;
+    let carriedInTickets = 0, carriedInPts = 0;
+    let completedTickets = 0, completedPts = 0;
+    let carriedOutTickets = 0, carriedOutPts = 0;
 
     for (const issue of enriched) {
       if (issue.__error) continue;
-      const timeline = buildSprintTimeline(issue, currentMemberships.get(issue.key) || []);
-      const atStart = sprintsAt(timeline, start).includes(sprintName);
-      const atEnd = sprintsAt(timeline, end).includes(sprintName);
-      const statusAtEnd = statusAt(issue, end);
-      const wasDoneByEnd = isDone(statusAtEnd);
       const pts = pickStoryPoints(issue) || 0;
 
-      if (atStart) {
-        committedTickets++;
-        committedPts += pts;
+      // Every issue the API returns for this (closed) sprint was in it — completed
+      // here, or carried out to a later sprint (its Sprint field still lists this
+      // sprint). Trust that rather than the changelog replay, which used to drop
+      // tickets it misjudged and undercount carryover-heavy sprints.
+      totalTickets++;
+      totalPts += pts;
+
+      // Origin: carried in from an earlier sprint, vs committed at start, vs added.
+      const sprintField = Array.isArray(issue.fields.customfield_10019)
+        ? issue.fields.customfield_10019 : [];
+      const carriedIn = sprintField.some((s) => s?.startDate && new Date(s.startDate) < start);
+      if (carriedIn) {
+        carriedInTickets++;
+        carriedInPts += pts;
+      } else {
+        const timeline = buildSprintTimeline(issue, currentMemberships.get(issue.key) || []);
+        const atStart = sprintsAt(timeline, start).includes(sprintName);
+        if (atStart) {
+          committedTickets++;
+          committedPts += pts;
+        } else {
+          addedTickets++;
+          addedPts += pts;
+        }
       }
-      if (!atStart && atEnd) {
-        addedTickets++;
-        addedPts += pts;
-      }
-      if (atStart && !atEnd) {
-        removedTickets++;
-        removedPts += pts;
-      }
-      if (atEnd && wasDoneByEnd) {
+
+      // Outcome: Done by sprint close, or carried out to the next sprint.
+      if (isDone(statusAt(issue, end))) {
         completedTickets++;
         completedPts += pts;
-      }
-      if (atEnd && !wasDoneByEnd) {
-        carriedOverTickets++;
-        carriedOverPts += pts;
+      } else {
+        carriedOutTickets++;
+        carriedOutPts += pts;
       }
     }
 
-    const completionRate =
-      committedPts + addedPts > 0
-        ? (100 * completedPts) / (committedPts + addedPts)
-        : 0;
+    const completionRate = totalPts > 0 ? (100 * completedPts) / totalPts : 0;
 
     console.log(
-      `  Committed: ${committedTickets}t/${committedPts}p  ` +
-        `Added: ${addedTickets}t/${addedPts}p  ` +
-        `Removed: ${removedTickets}t/${removedPts}p  ` +
+      `  Total: ${totalTickets}t/${totalPts}p  ` +
+        `(committed ${committedPts}p / added ${addedPts}p / carried-in ${carriedInPts}p)  ` +
         `Completed: ${completedTickets}t/${completedPts}p  ` +
-        `Carried over: ${carriedOverTickets}t/${carriedOverPts}p  ` +
+        `Carried out: ${carriedOutTickets}t/${carriedOutPts}p  ` +
         `Completion: ${completionRate.toFixed(0)}%`,
     );
 
@@ -352,16 +361,13 @@ async function main() {
       sprint_name: sprint.name,
       start: sprint.startDate.slice(0, 10),
       end: sprint.completeDate.slice(0, 10),
-      committed_tickets: committedTickets,
+      total_tickets: totalTickets,
+      total_pts: totalPts,
       committed_pts: committedPts,
-      added_tickets: addedTickets,
       added_pts: addedPts,
-      removed_tickets: removedTickets,
-      removed_pts: removedPts,
-      completed_tickets: completedTickets,
+      carried_in_pts: carriedInPts,
       completed_pts: completedPts,
-      carried_over_tickets: carriedOverTickets,
-      carried_over_pts: carriedOverPts,
+      carried_out_pts: carriedOutPts,
       completion_rate_pct: completionRate.toFixed(1),
     });
   }
