@@ -156,8 +156,20 @@ async function main() {
     // occasionally decided a (usually carried-over) ticket had left the sprint and
     // `continue`d past it, which dropped real tickets/points from every total below.
     const pts = issue.fields.customfield_10023 || 0;
-    const actual = typeof issue.fields.customfield_10218 === 'number'
-      ? issue.fields.customfield_10218 : null;
+    // Actual Story Points (customfield_10218) is a single-select field, so Jira returns
+    // it as an option object { value: "3", id: ... } — not a number. Read .value and
+    // coerce; fall back to numeric/string forms just in case the field type changes.
+    const rawActual = issue.fields.customfield_10218;
+    let actual = null;
+    if (rawActual && typeof rawActual === 'object' && rawActual.value != null) {
+      const n = Number(rawActual.value);
+      actual = Number.isFinite(n) ? n : null;
+    } else if (typeof rawActual === 'number') {
+      actual = rawActual;
+    } else if (typeof rawActual === 'string' && rawActual.trim() !== '') {
+      const n = Number(rawActual);
+      actual = Number.isFinite(n) ? n : null;
+    }
     const st = issue.fields.status?.name || 'Unknown';
     statusCounts[st] = (statusCounts[st] || 0) + 1;
     if (actual !== null) {
