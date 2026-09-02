@@ -18,6 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import { jiraFetch } from './jira.js';
 import { fetchCurrentSprintMemberships } from './sprint-membership.js';
+import { isComplete } from './status.js';
 
 const BOARD_ID = process.env.JIRA_BOARD_ID;
 const PROJECT_KEY = process.env.JIRA_PROJECT_KEY || 'KEEN';
@@ -210,15 +211,8 @@ function statusAt(issue, t) {
   return current;
 }
 
-function isDone(statusName) {
-  const n = (statusName || '').toLowerCase();
-  // Includes the "awaiting release" column (Ready for Theme Deploy / Awaiting
-  // Release Date) — QA-passed work awaiting a release date counts as complete.
-  return [
-    'deployed', 'completed', 'done', 'closed', 'resolved',
-    'ready for theme deploy', 'awaiting release date',
-  ].includes(n);
-}
+// "Finished" here means: completion rate / carry-out
+const isDone = isComplete;
 
 function pickStoryPoints(issue) {
   const v = issue.fields?.customfield_10023;

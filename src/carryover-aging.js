@@ -17,6 +17,7 @@ import 'dotenv/config';
 import fs from 'fs';
 import { jiraFetch } from './jira.js';
 import { fetchCurrentSprintMemberships } from './sprint-membership.js';
+import { isShipped } from './status.js';
 
 const BOARD_ID = process.env.JIRA_BOARD_ID;
 const CACHE_FILE = '.cache/changelogs.json';
@@ -25,10 +26,8 @@ const CACHE_FILE = '.cache/changelogs.json';
 const POST22_NAME_PREFIX_RE = /^(\d+):/; // matches "22: ..." through "27: ..."
 const POST22_MIN_NUMBER = 22;
 
-function isDone(s) {
-  return ['deployed', 'completed', 'done', 'closed', 'resolved']
-    .includes((s || '').toLowerCase());
-}
+// "Finished" here means: elapsed time until work actually shipped
+const isDone = isShipped;
 
 function parseSprintList(str) {
   if (!str) return [];

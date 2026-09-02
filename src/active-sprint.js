@@ -8,17 +8,12 @@
 
 import 'dotenv/config';
 import { jiraFetch } from './jira.js';
+import { isComplete } from './status.js';
 
 const BOARD_ID = process.env.JIRA_BOARD_ID;
 
-function isDone(s) {
-  // The "awaiting release" column (statuses "Ready for Theme Deploy" and "Awaiting
-  // Release Date") is QA-passed work just waiting on a release/deploy date — for our
-  // purposes that counts as complete.
-  return ['deployed', 'completed', 'done', 'closed', 'resolved',
-          'ready for theme deploy', 'awaiting release date']
-    .includes((s || '').toLowerCase());
-}
+// "Finished" here means: sprint progress
+const isDone = isComplete;
 
 function parseSprintList(str) {
   if (!str) return [];

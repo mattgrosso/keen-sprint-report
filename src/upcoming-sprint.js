@@ -8,13 +8,12 @@
 
 import 'dotenv/config';
 import { jiraFetch } from './jira.js';
+import { isShipped } from './status.js';
 
 const BOARD_ID = process.env.JIRA_BOARD_ID;
 
-function isDone(s) {
-  return ['deployed', 'completed', 'done', 'closed', 'resolved']
-    .includes((s || '').toLowerCase());
-}
+// "Finished" here means: what is still physically on the board next sprint
+const isDone = isShipped;
 function isLikelyToLand(s) {
   // Ready for Release essentially ships on its own; Ready for QA usually does too.
   return ['ready for release', 'ready for qa'].includes((s || '').toLowerCase());

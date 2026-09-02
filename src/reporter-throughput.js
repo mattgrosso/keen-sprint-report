@@ -16,13 +16,12 @@
 import 'dotenv/config';
 import fs from 'fs';
 import { jiraFetch } from './jira.js';
+import { isShipped } from './status.js';
 
 const CACHE_FILE = '.cache/changelogs.json';
 
-function isDone(s) {
-  return ['deployed', 'completed', 'done', 'closed', 'resolved']
-    .includes((s || '').toLowerCase());
-}
+// "Finished" here means: elapsed time to close
+const isDone = isShipped;
 function parseSprintList(str) {
   if (!str) return [];
   return str.split(',').map((s) => s.trim()).filter(Boolean);
