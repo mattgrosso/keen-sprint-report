@@ -18,11 +18,11 @@ import 'dotenv/config';
 import fs from 'fs';
 import { jiraFetch } from './jira.js';
 import { fetchCurrentSprintMemberships } from './sprint-membership.js';
-import { isComplete } from './status.js';
+import { isComplete, BASELINE_SPRINT_NUM } from './status.js';
 
 const CACHE_FILE = '.cache/changelogs.json';
 const BOARD_ID = process.env.JIRA_BOARD_ID;
-const POST22_MIN = 22;
+const POST22_MIN = BASELINE_SPRINT_NUM;
 
 // "Finished" here means: did it get finished in the sprint (ALIGNED 2026-09-02)
 const isDone = isComplete;

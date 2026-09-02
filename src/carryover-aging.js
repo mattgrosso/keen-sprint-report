@@ -17,14 +17,14 @@ import 'dotenv/config';
 import fs from 'fs';
 import { jiraFetch } from './jira.js';
 import { fetchCurrentSprintMemberships } from './sprint-membership.js';
-import { isShipped } from './status.js';
+import { isShipped, BASELINE_SPRINT_NUM } from './status.js';
 
 const BOARD_ID = process.env.JIRA_BOARD_ID;
 const CACHE_FILE = '.cache/changelogs.json';
 
 // Sprint 22 is the cutoff per CLAUDE.md analytical guardrails.
 const POST22_NAME_PREFIX_RE = /^(\d+):/; // matches "22: ..." through "27: ..."
-const POST22_MIN_NUMBER = 22;
+const POST22_MIN_NUMBER = BASELINE_SPRINT_NUM;
 
 // "Finished" here means: elapsed time until work actually shipped
 const isDone = isShipped;

@@ -38,10 +38,61 @@ Then edit `.env` and fill in:
 
 `JIRA_BASE_URL` and `JIRA_PROJECT_KEY` already have sensible defaults.
 
+## Using this on another board
+
+The tool was built for KEEN, but nothing about it is KEEN-only except a few
+workflow assumptions. To point it at a different team's board:
+
+1. **Find the board id** and put it in `.env`:
+   ```bash
+   node src/find-boards.js
+   ```
+
+2. **Run the config check. Do this before trusting any output.**
+   ```bash
+   node src/check-config.js
+   ```
+   It prints your board's columns, every status in them, and how this tool
+   classifies each one. Anything in your final columns reported as
+   `NOT finished` is a problem — see below.
+
+3. **Set the workflow statuses** it tells you about, in `.env`:
+   ```
+   DONE_STATUSES=deployed,completed,done,closed,resolved,canceled
+   AWAITING_RELEASE_STATUSES=ready for theme deploy,awaiting release date
+   BASELINE_SPRINT_NUM=22
+   ```
+   Re-run `check-config.js` until it reports no unrecognised statuses.
+
+### Why step 2 matters
+
+Status names are workflow-specific, and **the failure mode is silent.** A status
+this tool doesn't recognise is treated as *unfinished* — so completion rates and
+carry-over figures come out wrong, with no error and no obvious tell. On the KEEN
+board, "Awaiting Release Date" and "Ready for Theme Deploy" count as complete;
+another team will have different names, or none at all.
+
+`BASELINE_SPRINT_NUM` is the first sprint number to include in historical
+baselines. It defaults to 22 because that's where KEEN's process settled — pick
+whatever is meaningful for your board, or set it low to include everything.
+
+### Two definitions of "done", on purpose
+
+`src/status.js` exports two functions, and each report declares which it uses:
+
+| | Includes | Used for |
+|---|---|---|
+| `isComplete()` | terminal statuses **+ the awaiting-release column** | sprint progress, completion rate, carry-out |
+| `isShipped()` | terminal statuses only | elapsed time to done, forecasting what's still on the board |
+
+Both count `Canceled` as finished — a canceled ticket doesn't carry into the next
+sprint, so counting it unfinished inflates carry-over.
+
 ## Verify your setup
 
 ```bash
 node src/whoami.js          # confirms credentials work
+node src/check-config.js    # confirms your board's statuses are classified correctly
 node src/list-sprints.js    # lists all sprints on the board
 ```
 
